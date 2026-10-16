@@ -1,0 +1,87 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ohm Store Management</title>
+    <link rel="stylesheet" href="./src/style.css">
+</head>
+
+<body>
+    <div class="container">
+
+        <!-- Logo -->
+        <img src="./src/assets/logo.png" alt="Ohm" class="logo">
+
+        <!-- Step 0: Login screen -->
+        <div id="login-screen">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" placeholder="Enter username" autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" placeholder="Enter password" autocomplete="current-password">
+            </div>
+            <p id="login-error" class="login-error hidden">Invalid username or password.</p>
+            <button id="login-button">Login</button>
+        </div>
+
+        <!-- Step 1: Category / Sub-category selection -->
+        <div id="selection-screen" class="hidden">
+            <div class="screen-header">
+                <div>
+                    <h2>Select Category</h2>
+                    <p class="logged-in-user">Logged in as <span id="logged-in-username"></span></p>
+                </div>
+                <button id="logout-button" class="back-button">Logout</button>
+            </div>
+            <div class="form-group">
+                <label for="category">Category</label>
+                <select id="category">
+                    <option value="">Select Category</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="sub-category">Sub Category</label>
+                <select id="sub-category" disabled>
+                    <option value="">Select Sub Category</option>
+                </select>
+            </div>
+            <button id="start-scan-button" disabled>Next</button>
+        </div>
+
+        <!-- Step 2: Scanning screen (shown after category+sub-category chosen) -->
+        <div id="scanning-screen" class="hidden">
+            <div class="screen-header">
+                <h2>Scan Product</h2>
+                <button id="back-button" class="back-button">&larr; Back</button>
+            </div>
+            <div class="info-card">
+                <p><strong>Category:</strong> <span id="selected-category"></span></p>
+                <p><strong>Sub Category:</strong> <span id="selected-subcategory"></span></p>
+                <p><strong>Inventory Uploaded:</strong> <span id="inventory-uploaded-at"></span></p>
+                <p><strong>Total Scanned:</strong> <span id="total-scanned-count">0</span></p>
+            </div>
+            <button id="scan-barcode">Start Scanning</button>
+            <div id="barcode-result"></div>
+            <div id="product-details"></div>
+            <div id="actions" class="actions">
+                <button id="next-button" disabled>
+                    Next
+                </button>
+                <button id="finish-button" disabled>
+                    Finish
+                </button>
+            </div>
+        </div>
+
+        <!-- Step 3: Summary -->
+        <div id="summary"></div>
+
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+</body>
+</html>

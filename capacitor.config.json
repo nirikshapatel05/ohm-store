@@ -1,0 +1,13 @@
+{
+  "appId": "com.ohmapp",
+  "appName": "Ohm Store",
+  "webDir": "dist",
+  "server": {
+    "cleartext": true
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}
