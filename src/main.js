@@ -1,5 +1,5 @@
 import { CapacitorBarcodeScanner, CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
-import { loginUser } from './api.js';
+import { loginUser, getProducts } from './api.js';
 import { saveAuth, getAuth, clearAuth } from './auth.js';
 
 // Session data returned by the login API.
@@ -10,7 +10,7 @@ let currentUser = null;
 
 // Original demo product data.
 // This remains static until a products API is available.
-const products = {
+/*const products = {
     'ABC-abc-1234': {
         name: 'Pampers Diapers Pack (M)',
         category: 'babycare',
@@ -46,7 +46,10 @@ const products = {
         price: 999,
         stock: 8,
     },
-};
+};*/
+
+// Products loaded from the backend API.
+let products = [];
 
 // HTML elements.
 const loginScreen = document.querySelector('#login-screen');
@@ -305,8 +308,8 @@ loginButton.addEventListener('click', async () => {
 });
 
 // Start scanning.
-startScanButton.addEventListener('click', () => {
-    // Validate that a category and subcategory are selected.
+
+startScanButton.addEventListener('click', async () => {
     const category = findCategory(categorySelect.value);
 
     const subcategory = findSubcategory(
@@ -318,27 +321,49 @@ startScanButton.addEventListener('click', () => {
         return;
     }
 
-    // Reset scanning data before starting a new scan session.
-    resetScan();
+    if (!accessToken || !currentUser?.id || !currentUser?.store_id) {
+        alert('Please log in again.');
+        return;
+    }
 
-    // Display the selected category and subcategory in the scanning screen.
-    selectedCategory.textContent = category.name;
-    selectedSubCategory.textContent = subcategory.name;
+    startScanButton.disabled = true;
+    startScanButton.textContent = 'Loading products...';
 
-    // Display the current date and time as the inventory upload timestamp.
-    inventoryUploadedAt.textContent = new Date().toLocaleString(
-        'en-IN',
-        {
-            day: '2-digit',
-            month: 'short',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-        }
-    );
+    try {
+        products = await getProducts(
+            accessToken,
+            currentUser.id,
+            currentUser.store_id,
+            category.id,
+            subcategory.id
+        );
 
-    // Show the scanning screen.
-    showScreen(scanningScreen);
+        console.log('Products loaded:', products);
+
+        resetScan();
+
+        selectedCategory.textContent = category.name;
+        selectedSubCategory.textContent = subcategory.name;
+
+        inventoryUploadedAt.textContent = new Date().toLocaleString(
+            'en-IN',
+            {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+            }
+        );
+
+        showScreen(scanningScreen);
+    } catch (error) {
+        console.error('Unable to load products:', error);
+        alert(error.message || 'Unable to load products.');
+    } finally {
+        startScanButton.disabled = false;
+        startScanButton.textContent = 'Start Scanning';
+    }
 });
 
 // Go back to category selection.
@@ -385,7 +410,9 @@ async function scanProduct() {
 
         barcodeResult.appendChild(barcodeParagraph);
 
-        const product = products[barcode];
+        const product = products.find(
+            (item) => String(item.product_id) === barcode
+        );
 
         // Display product details and check for category/subcategory match.
         if (!product) {
@@ -403,17 +430,21 @@ async function scanProduct() {
             const subcategoryKey = product.subCategory;
 
             // Find the actual category and subcategory based on the product's category and subcategory keys.
-            const actualCategory = categories.find((category) =>
+            /*const actualCategory = categories.find((category) =>
                 category.name.toLowerCase() ===
                 ({
                     babycare: 'baby care',
                     clothing: 'clothing',
                     toys: 'toys',
                 }[categoryKey] ?? categoryKey.toLowerCase())
+            );*/
+
+            const actualCategory = categories.find(
+                (item) => item.name === product.category_name
             );
 
             // Find the actual subcategory based on the product's subcategory key.
-            const actualSubcategory =
+            /*const actualSubcategory =
                 actualCategory?.subcategories?.find((subcategory) =>
                     subcategory.name.toLowerCase() ===
                     ({
@@ -424,6 +455,11 @@ async function scanProduct() {
                         softtoys: 'soft toys',
                         edutoys: 'educational toys',
                     }[subcategoryKey] ?? subcategoryKey.toLowerCase())
+                );*/
+            
+            const actualSubcategory =
+                actualCategory?.subcategories?.find(
+                    (item) => item.name === product.subcategory_name
                 );
 
             const selectedCategoryData =
@@ -476,7 +512,7 @@ async function scanProduct() {
             const productName = document.createElement('p');
             productName.innerHTML = '<strong>Product:</strong> ';
             productName.appendChild(
-                document.createTextNode(product.name)
+                document.createTextNode(product.product_name)
             );
             details.appendChild(productName);
 
@@ -511,14 +547,14 @@ async function scanProduct() {
             const priceParagraph = document.createElement('p');
             priceParagraph.innerHTML = '<strong>Price:</strong> ';
             priceParagraph.appendChild(
-                document.createTextNode(`₹${product.price}`)
+                document.createTextNode(`₹${product.mrp}`)
             );
             details.appendChild(priceParagraph);
 
             const stockParagraph = document.createElement('p');
             stockParagraph.innerHTML = '<strong>Stock:</strong> ';
             stockParagraph.appendChild(
-                document.createTextNode(String(product.stock))
+                document.createTextNode(String(product.quantity))
             );
             details.appendChild(stockParagraph);
 

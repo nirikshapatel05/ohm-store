@@ -1,4 +1,4 @@
-// import { CapacitorHttp } from '@capacitor/core';
+import { CapacitorHttp } from '@capacitor/core';
 
 const API_BASE_URL = 'http://192.168.0.6:8000/api/app';
 
@@ -88,3 +88,53 @@ export async function loginUser(username, password) {
 
     return categories;
 }*/
+
+// Get products using API.
+export async function getProducts(
+    accessToken,
+    userId,
+    storeId,
+    categoryId,
+    subcategoryId
+) {
+    const params = new URLSearchParams({
+        user_id: String(userId),
+        store_id: String(storeId),
+        category_id: String(categoryId),
+        subcategory_id: String(subcategoryId),
+    });
+
+    const response = await fetch(
+        `${API_BASE_URL}/products/?${params.toString()}`,
+        {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+            },
+        }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok) {
+        throw new Error(
+            result?.message || `Products API failed: ${response.status}`
+        );
+    }
+
+    if (result?.status !== 'success') {
+        throw new Error(
+            result?.message || 'Unable to load products.'
+        );
+    }
+
+    const products = result.data?.products;
+
+    if (!Array.isArray(products)) {
+        throw new Error('Invalid products API response.');
+    }
+
+    return products;
+}
+
+
