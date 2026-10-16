@@ -161,6 +161,10 @@ button:disabled {
     font-size: 1.1rem;
 }
 
+.product-card h2:empty {
+    margin: 0;
+}
+
 .mismatch-highlight {
     background: var(--danger-bg);
     border: 1px solid var(--danger-border);
