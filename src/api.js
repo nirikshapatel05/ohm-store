@@ -1,8 +1,20 @@
-import { CapacitorHttp } from '@capacitor/core';
+/**
+ * API module for handling authentication and data retrieval.
+ * @module api
+ */
 
+/**
+ * Base URL for the backend API.
+ * @constant {string}
+ */
 const API_BASE_URL = 'http://192.168.0.6:8000/api/app';
 
-// Login using the backend API.
+/**
+ * Login using the backend API.
+ * @param {string} username
+ * @param {string} password
+ * @returns {Promise<AuthData>}
+ */
 export async function loginUser(username, password) {
     const formData = new FormData();
 
@@ -58,7 +70,11 @@ export async function loginUser(username, password) {
     };
 }
 
-// Load categories separately when needed.
+/**
+ * Load categories separately when needed.
+ * @param {string} accessToken
+ * @returns {Promise<Category[]>}
+ */
 /*export async function getCategories(accessToken) {
     const response = await CapacitorHttp.get({
         url: `${API_BASE_URL}/categories/`,
@@ -89,7 +105,15 @@ export async function loginUser(username, password) {
     return categories;
 }*/
 
-// Get products using API.
+/**
+ * Get products using API.
+ * @param {string} accessToken
+ * @param {number} userId
+ * @param {number} storeId
+ * @param {number} categoryId
+ * @param {number} subcategoryId
+ * @returns {Promise<Product[]>}
+ */
 export async function getProducts(
     accessToken,
     userId,
@@ -104,6 +128,7 @@ export async function getProducts(
         subcategory_id: String(subcategoryId),
     });
 
+    // Use fetch to send the request to the backend API.
     const response = await fetch(
         `${API_BASE_URL}/products/?${params.toString()}`,
         {
@@ -116,12 +141,14 @@ export async function getProducts(
 
     const result = await response.json();
 
+    // Check for HTTP errors and API response status.
     if (!response.ok) {
         throw new Error(
             result?.message || `Products API failed: ${response.status}`
         );
     }
 
+    // Check for API response status.
     if (result?.status !== 'success') {
         throw new Error(
             result?.message || 'Unable to load products.'

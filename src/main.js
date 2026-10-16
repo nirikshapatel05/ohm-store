@@ -1,336 +1,628 @@
-import { CapacitorBarcodeScanner, CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
+/**
+ * Store Management – main application module.
+ *
+ * Flow:
+ *   1. Login            → authenticates against the API and stores the session.
+ *   2. Selection        → user picks a category and sub-category.
+ *   3. Scanning         → products for that selection are loaded, then each
+ *                         scanned barcode is checked against them.
+ *   4. Summary          → totals of scanned / available / not-available items.
+ *
+ * Dependencies:
+ *   - ./api.js  → loginUser(), getProducts()
+ *   - ./auth.js → saveAuth(), getAuth(), clearAuth() (persistent session)
+ *   - @capacitor/barcode-scanner → native camera barcode scanning
+ */
+
+import {
+    CapacitorBarcodeScanner,
+    CapacitorBarcodeScannerTypeHint,
+} from '@capacitor/barcode-scanner';
 import { loginUser, getProducts } from './api.js';
 import { saveAuth, getAuth, clearAuth } from './auth.js';
 
-// Session data returned by the login API.
-let categories = [];
-let accessToken = null;
-let refreshToken = null;
-let currentUser = null;
+/* -------------------------------------------------------------------------- */
+/*  Types (documentation only)                                                */
+/* -------------------------------------------------------------------------- */
 
-// Original demo product data.
-// This remains static until a products API is available.
-/*const products = {
-    'ABC-abc-1234': {
-        name: 'Pampers Diapers Pack (M)',
-        category: 'babycare',
-        subCategory: 'diapers',
-        price: 599,
-        stock: 40,
-    },
-    '1234567890': {
-        name: 'Philips Avent Feeding Bottle',
-        category: 'babycare',
-        subCategory: 'feeding',
-        price: 349,
-        stock: 22,
-    },
-    'ABC-1234': {
-        name: 'FS Mini Klub Boys T-Shirt',
-        category: 'clothing',
-        subCategory: 'boyswear',
-        price: 449,
-        stock: 15,
-    },
-    'XYZ-9999': {
-        name: 'Girls Frock - Floral Print',
-        category: 'clothing',
-        subCategory: 'girlswear',
-        price: 799,
-        stock: 12,
-    },
-    'TOY-1010': {
-        name: 'Soft Teddy Bear - 2ft',
-        category: 'toys',
-        subCategory: 'softtoys',
-        price: 999,
-        stock: 8,
-    },
-};*/
+/**
+ * @typedef {Object} Subcategory
+ * @property {number|string} id
+ * @property {string} name
+ */
 
-// Products loaded from the backend API.
-let products = [];
+/**
+ * @typedef {Object} Category
+ * @property {number|string} id
+ * @property {string} name
+ * @property {Subcategory[]} [subcategories]
+ */
 
-// HTML elements.
-const loginScreen = document.querySelector('#login-screen');
-const usernameInput = document.querySelector('#username');
-const passwordInput = document.querySelector('#password');
-const loginError = document.querySelector('#login-error');
-const loginButton = document.querySelector('#login-button');
+/**
+ * @typedef {Object} User
+ * @property {number|string} id
+ * @property {string} [name]
+ * @property {number|string} store_id
+ * @property {string} [store_name]
+ */
 
-const selectionScreen = document.querySelector('#selection-screen');
-const loggedInUsername = document.querySelector('#logged-in-username');
-const logoutButton = document.querySelector('#logout-button');
-const categorySelect = document.querySelector('#category');
-const subCategorySelect = document.querySelector('#sub-category');
-const startScanButton = document.querySelector('#start-scan-button');
+/**
+ * @typedef {Object} Product
+ * @property {number|string} product_id       Barcode value.
+ * @property {string} product_name
+ * @property {string} category_name
+ * @property {string} subcategory_name
+ * @property {number} mrp
+ * @property {number} quantity
+ */
 
-const scanningScreen = document.querySelector('#scanning-screen');
-const backButton = document.querySelector('#back-button');
-const selectedCategory = document.querySelector('#selected-category');
-const selectedSubCategory = document.querySelector('#selected-subcategory');
-const inventoryUploadedAt = document.querySelector('#inventory-uploaded-at');
-const totalScannedCount = document.querySelector('#total-scanned-count');
+/**
+ * @typedef {Object} AuthData  Payload returned by the login API.
+ * @property {string} access
+ * @property {string} refresh
+ * @property {User} user
+ * @property {Category[]} categories
+ */
 
-const scanButton = document.querySelector('#scan-barcode');
-const barcodeResult = document.querySelector('#barcode-result');
-const productDetails = document.querySelector('#product-details');
-const nextButton = document.querySelector('#next-button');
-const finishButton = document.querySelector('#finish-button');
-const summary = document.querySelector('#summary');
+/* -------------------------------------------------------------------------- */
+/*  Constants                                                                 */
+/* -------------------------------------------------------------------------- */
 
-// Scan counters.
-let totalScanned = 0;
-let matchedProducts = 0;
-let mismatchedProducts = 0;
+const MESSAGES = {
+    loginRequired: 'Please enter your username and password.',
+    loginFailed: 'Unable to log in. Please try again.',
+    sessionExpired: 'Please log in again.',
+    productsFailed: 'Unable to load products.',
+    logoutFailed: 'Unable to log out. Please try again.',
+    scanFailed: 'Unable to scan the barcode.',
+    noBarcode: 'No barcode detected.',
+};
 
-// Validate required HTML elements.
-const requiredElements = [
-    loginScreen,
-    usernameInput,
-    passwordInput,
-    loginError,
-    loginButton,
-    selectionScreen,
-    loggedInUsername,
-    logoutButton,
-    categorySelect,
-    subCategorySelect,
-    startScanButton,
-    scanningScreen,
-    backButton,
-    selectedCategory,
-    selectedSubCategory,
-    inventoryUploadedAt,
-    totalScannedCount,
-    scanButton,
-    barcodeResult,
-    productDetails,
-    nextButton,
-    finishButton,
-    summary,
-];
+const LABELS = {
+    startScanning: 'Start Scanning',
+    loadingProducts: 'Loading products...',
+    scanHeading: 'Scan Products',
+    summaryHeading: 'Summary',
+};
 
-// if (requiredElements.some((element) => !element)) {
-//     throw new Error(
-//         'Some required HTML elements are missing. Check index.html.'
-//     );
-// }
+const PLACEHOLDERS = {
+    category: '<option value="">Select Category</option>',
+    subCategory: '<option value="">Select Sub-category</option>',
+};
 
-// Find a category using its ID.
+/* -------------------------------------------------------------------------- */
+/*  Application state                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Single source of truth for runtime data.
+ * (Session data is also persisted via auth.js so it survives app restarts.)
+ */
+const state = {
+    /** @type {string|null} */ accessToken: null,
+    /** @type {string|null} */ refreshToken: null,
+    /** @type {User|null} */ currentUser: null,
+    /** @type {Category[]} */ categories: [],
+    /** @type {Product[]} Products for the selected category/sub-category. */
+    products: [],
+    /** Counters for the current scanning session. */
+    stats: { total: 0, matched: 0, mismatched: 0 },
+};
+
+/* -------------------------------------------------------------------------- */
+/*  DOM references                                                            */
+/* -------------------------------------------------------------------------- */
+
+const $ = (selector) => document.querySelector(selector);
+
+const dom = {
+    // Login screen
+    loginScreen: $('#login-screen'),
+    usernameInput: $('#username'),
+    passwordInput: $('#password'),
+    loginError: $('#login-error'),
+    loginButton: $('#login-button'),
+
+    // Selection screen
+    selectionScreen: $('#selection-screen'),
+    loggedInUsername: $('#logged-in-username'),
+    logoutButton: $('#logout-button'),
+    categorySelect: $('#category'),
+    subCategorySelect: $('#sub-category'),
+    startScanButton: $('#start-scan-button'),
+
+    // Scanning screen
+    scanningScreen: $('#scanning-screen'),
+    scanHeading: $('#scanning-screen .screen-header h2'),
+    backButton: $('#back-button'),
+    selectedCategory: $('#selected-category'),
+    selectedSubCategory: $('#selected-subcategory'),
+    inventoryUploadedAt: $('#inventory-uploaded-at'),
+    totalScannedCount: $('#total-scanned-count'),
+    scanButton: $('#scan-barcode'),
+    barcodeResult: $('#barcode-result'),
+    productDetails: $('#product-details'),
+    nextButton: $('#next-button'),
+    finishButton: $('#finish-button'),
+    summary: $('#summary'),
+};
+
+/**
+ * Logs any element that could not be found, so a mismatch between
+ * index.html and this file is easy to diagnose.
+ */
+function reportMissingElements() {
+    const missing = Object.entries(dom)
+        .filter(([, element]) => !element)
+        .map(([name]) => name);
+
+    if (missing.length > 0) {
+        console.error(
+            `Missing HTML elements (check index.html): ${missing.join(', ')}`
+        );
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Lookup helpers                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Finds a category by ID.
+ * @param {number|string} categoryId
+ * @returns {Category|undefined}
+ */
 function findCategory(categoryId) {
-    return categories.find(
+    return state.categories.find(
         (category) => String(category.id) === String(categoryId)
     );
 }
 
-// Find a subcategory using its ID.
+/**
+ * Finds a sub-category by ID within a given category.
+ * @param {Category|undefined} category
+ * @param {number|string} subcategoryId
+ * @returns {Subcategory|undefined}
+ */
 function findSubcategory(category, subcategoryId) {
     return category?.subcategories?.find(
-        (subcategory) =>
-            String(subcategory.id) === String(subcategoryId)
+        (subcategory) => String(subcategory.id) === String(subcategoryId)
     );
 }
 
-// Display the correct screen.
+/**
+ * Builds the "Name - Store" label shown in the header.
+ * @param {User} user
+ * @returns {string}
+ */
+function formatUserLabel(user) {
+    return [user.name, user.store_name].filter(Boolean).join(' - ');
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Screen & form helpers                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Shows one screen and hides the others.
+ * @param {HTMLElement} screenToShow
+ */
 function showScreen(screenToShow) {
-    loginScreen.classList.toggle(
-        'hidden',
-        screenToShow !== loginScreen
-    );
-
-    selectionScreen.classList.toggle(
-        'hidden',
-        screenToShow !== selectionScreen
-    );
-
-    scanningScreen.classList.toggle(
-        'hidden',
-        screenToShow !== scanningScreen
+    [dom.loginScreen, dom.selectionScreen, dom.scanningScreen].forEach(
+        (screen) => screen.classList.toggle('hidden', screen !== screenToShow)
     );
 }
 
-// Populate the category dropdown using API data.
+/**
+ * Shows an error under the login form.
+ * @param {string} message
+ */
+function showLoginError(message) {
+    dom.loginError.textContent = message;
+    dom.loginError.classList.remove('hidden');
+}
+
+/**
+ * Clears the login error message.
+ */
+function clearLoginError() {
+    dom.loginError.textContent = '';
+    dom.loginError.classList.add('hidden');
+}
+
+/**
+ * Fills the category dropdown from `state.categories`.
+ * @returns {void}
+ */
 function populateCategories() {
-    categorySelect.innerHTML =
-        '<option value="">Select Category</option>';
+    dom.categorySelect.innerHTML = PLACEHOLDERS.category;
 
-    categories.forEach((category) => {
+    state.categories.forEach((category) => {
         const option = document.createElement('option');
-
         option.value = String(category.id);
         option.textContent = category.name;
-
-        categorySelect.appendChild(option);
+        dom.categorySelect.appendChild(option);
     });
 }
 
-// Reset category and subcategory selection.
-function resetSelection() {
-    categorySelect.value = '';
+/**
+ * Fills the sub-category dropdown for the given category.
+ * The dropdown stays disabled if the category has no sub-categories.
+ * @param {Category|undefined} category
+ * @returns {void}
+ */
+function populateSubcategories(category) {
+    dom.subCategorySelect.innerHTML = PLACEHOLDERS.subCategory;
+    dom.subCategorySelect.disabled = true;
+    dom.startScanButton.disabled = true;
 
-    subCategorySelect.innerHTML =
-        '<option value="">Select Sub-category</option>';
-
-    subCategorySelect.disabled = true;
-    startScanButton.disabled = true;
-}
-
-// Reset scanning data and counters.
-function resetScan() {
-    totalScanned = 0;
-    matchedProducts = 0;
-    mismatchedProducts = 0;
-
-    scanningScreen.querySelector('.screen-header h2').textContent =
-        'Scan Product';
-
-    totalScannedCount.textContent = '0';
-    barcodeResult.innerHTML = '';
-    productDetails.innerHTML = '';
-    summary.innerHTML = '';
-
-    scanButton.classList.remove('hidden');
-    nextButton.classList.remove('hidden');
-    finishButton.classList.remove('hidden');
-
-    scanButton.disabled = false;
-    nextButton.disabled = true;
-    finishButton.disabled = true;
-}
-
-// Update subcategories when a category changes.
-categorySelect.addEventListener('change', () => {
-    subCategorySelect.innerHTML =
-        '<option value="">Select Sub-category</option>';
-
-    subCategorySelect.disabled = true;
-    startScanButton.disabled = true;
-
-    const category = findCategory(categorySelect.value);
-
-    if (!category) {
-        return;
-    }
-
-    const subcategories = category.subcategories ?? [];
+    const subcategories = category?.subcategories ?? [];
 
     subcategories.forEach((subcategory) => {
         const option = document.createElement('option');
-
         option.value = String(subcategory.id);
         option.textContent = subcategory.name;
-
-        subCategorySelect.appendChild(option);
+        dom.subCategorySelect.appendChild(option);
     });
 
-    // Categories without subcategories cannot be scanned yet.
-    subCategorySelect.disabled = subcategories.length === 0;
-});
+    dom.subCategorySelect.disabled = subcategories.length === 0;
+}
 
-// Enable Start Scanning when a subcategory is selected.
-subCategorySelect.addEventListener('change', () => {
-    startScanButton.disabled = !subCategorySelect.value;
-});
+/**
+ * Resets both dropdowns to their initial state.
+ * @returns {void}
+ */
+function resetSelection() {
+    dom.categorySelect.value = '';
+    populateSubcategories(undefined);
+}
 
-// Login using the API.
-loginButton.addEventListener('click', async () => {
-    const username = usernameInput.value.trim();
-    const password = passwordInput.value;
+/**
+ * Enables / disables the three scan action buttons.
+ * @param {{scan: boolean, next: boolean, finish: boolean}} enabled
+ */
+function setScanControls({ scan, next, finish }) {
+    dom.scanButton.disabled = !scan;
+    dom.nextButton.disabled = !next;
+    dom.finishButton.disabled = !finish;
+}
 
-    loginError.textContent = '';
-    loginError.classList.add('hidden');
+/**
+ * Resets counters and the scanning screen UI.
+ * @returns {void}
+ */
+function resetScan() {
+    state.stats = { total: 0, matched: 0, mismatched: 0 };
 
-    // Validate input fields.
+    dom.scanHeading.textContent = LABELS.scanHeading;
+    dom.totalScannedCount.textContent = '0';
+    dom.barcodeResult.innerHTML = '';
+    dom.productDetails.innerHTML = '';
+    dom.summary.innerHTML = '';
+
+    dom.scanButton.classList.remove('hidden');
+    dom.nextButton.classList.remove('hidden');
+    dom.finishButton.classList.remove('hidden');
+
+    setScanControls({ scan: true, next: false, finish: false });
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Session helpers                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Loads an authenticated session into memory and prepares the
+ * selection screen UI (does not switch screens).
+ * @param {AuthData} data
+ */
+function applySession(data) {
+    state.accessToken = data.access;
+    state.refreshToken = data.refresh;
+    state.currentUser = data.user;
+    state.categories = data.categories ?? [];
+
+    populateCategories();
+    dom.loggedInUsername.textContent = formatUserLabel(state.currentUser);
+
+    resetSelection();
+    resetScan();
+}
+
+/**
+ * Clears all in-memory session data and related UI.
+ * @returns {void}
+ */
+function clearSession() {
+    state.accessToken = null;
+    state.refreshToken = null;
+    state.currentUser = null;
+    state.categories = [];
+    state.products = [];
+
+    resetScan();
+    resetSelection();
+    populateCategories();
+
+    dom.loggedInUsername.textContent = '';
+    dom.usernameInput.value = '';
+    dom.passwordInput.value = '';
+    clearLoginError();
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Rendering helpers                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Creates `<p><strong>label</strong> value</p>`.
+ * `value` is inserted as text, so API data can never inject HTML.
+ * @param {string} label
+ * @param {string} value
+ * @returns {HTMLParagraphElement}
+ */
+function createDetailRow(label, value) {
+    const paragraph = document.createElement('p');
+    const strong = document.createElement('strong');
+
+    strong.textContent = `${label} `;
+    paragraph.append(strong, document.createTextNode(value));
+
+    return paragraph;
+}
+
+/**
+ * Shows the scanned barcode value.
+ * @param {string} barcode
+ * @returns {void}
+ */
+function renderBarcode(barcode) {
+    dom.barcodeResult.replaceChildren(createDetailRow('Barcode:', barcode));
+}
+
+/**
+ * Shows an error / info message in the barcode result area.
+ * @param {string} label
+ * @param {string} message
+ * @returns {void}
+ */
+function renderScanMessage(label, message) {
+    dom.barcodeResult.replaceChildren(createDetailRow(label, message));
+}
+
+/**
+ * Card shown when the barcode is not in the loaded product list.
+ * @returns {void}
+ */
+function renderProductNotFound() {
+    const card = document.createElement('div');
+    card.className = 'product-card mismatch-highlight';
+
+    const note = document.createElement('p');
+    note.textContent = 'Product Not Found';
+
+    const heading = document.createElement('h2');
+    heading.textContent = 'Product Mismatch';
+
+    card.append(note, heading);
+    dom.productDetails.appendChild(card);
+}
+
+/**
+ * Card showing product details.
+ * @param {Product} product
+ * @param {{actualCategory?: Category, actualSubcategory?: Subcategory, isMatch: boolean}} match
+ * @returns {void}
+ */
+function renderProductCard(product, { actualCategory, actualSubcategory, isMatch }) {
+    const card = document.createElement('div');
+    card.className = isMatch
+        ? 'product-card'
+        : 'product-card mismatch-highlight';
+
+    const heading = document.createElement('h2');
+    heading.textContent = !isMatch ? 'Product Mismatch' : '';
+    card.appendChild(heading);
+
+    if (!isMatch) {
+        card.appendChild(document.createElement('hr'));
+    }
+
+    card.append(
+        createDetailRow('Product:', product.product_name),
+        createDetailRow('Category:', actualCategory?.name ?? 'Unknown'),
+        createDetailRow('Sub Category:', actualSubcategory?.name ?? 'Unknown' ),
+        createDetailRow('Price:', `₹${product.mrp}`),
+        createDetailRow('Stock:', String(product.quantity))
+    );
+
+    dom.productDetails.appendChild(card);
+}
+
+/**
+ * Replaces the scanning UI with the final summary card.
+ * @returns {void}
+ */
+function renderSummary() {
+    const { total, matched, mismatched } = state.stats;
+
+    dom.barcodeResult.innerHTML = '';
+    dom.productDetails.innerHTML = '';
+
+    dom.scanButton.classList.add('hidden');
+    dom.nextButton.classList.add('hidden');
+    dom.finishButton.classList.add('hidden');
+
+    dom.scanHeading.textContent = LABELS.summaryHeading;
+
+    const card = document.createElement('div');
+    card.className = 'summary-card';
+
+    const heading = document.createElement('h2');
+    heading.textContent = 'Scan Summary';
+
+    card.append(
+        heading,
+        createDetailRow('Total Scanned Products:', String(total)),
+        createDetailRow('Available Products:', String(matched)),
+        createDetailRow('Not Available Products:', String(mismatched))
+    );
+
+    dom.summary.replaceChildren(card);
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Scanning logic                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Checks whether a product belongs to the category / sub-category the user
+ * selected. The API returns names, so they are resolved to IDs first.
+ * @param {Product} product
+ * @returns {{actualCategory?: Category, actualSubcategory?: Subcategory, isMatch: boolean}}
+ */
+function evaluateProduct(product) {
+    const actualCategory = state.categories.find(
+        (category) => category.name === product.category_name
+    );
+
+    const actualSubcategory = actualCategory?.subcategories?.find(
+        (subcategory) => subcategory.name === product.subcategory_name
+    );
+
+    const isMatch =
+        Boolean(actualCategory && actualSubcategory) &&
+        String(actualCategory.id) === String(dom.categorySelect.value) &&
+        String(actualSubcategory.id) === String(dom.subCategorySelect.value);
+
+    return { actualCategory, actualSubcategory, isMatch };
+}
+
+/**
+ * Opens the camera, scans one barcode and shows the result.
+ * Updates the counters for the summary.
+ */
+async function scanProduct() {
+    dom.barcodeResult.innerHTML = '';
+    dom.productDetails.innerHTML = '';
+    setScanControls({ scan: false, next: false, finish: false });
+
+    try {
+        const result = await CapacitorBarcodeScanner.scanBarcode({
+            hint: CapacitorBarcodeScannerTypeHint.ALL,
+        });
+
+        const barcode = result?.ScanResult?.trim();
+
+        if (!barcode) {
+            dom.barcodeResult.innerHTML = `<p>${MESSAGES.noBarcode}</p>`;
+            // Let the user retry, or move on / finish.
+            setScanControls({ scan: true, next: true, finish: true });
+            return;
+        }
+
+        state.stats.total += 1;
+        dom.totalScannedCount.textContent = String(state.stats.total);
+        renderBarcode(barcode);
+
+        const product = state.products.find(
+            (item) => String(item.product_id) === barcode
+        );
+
+        if (!product) {
+            state.stats.mismatched += 1;
+            renderProductNotFound();
+        } else {
+            const match = evaluateProduct(product);
+
+            if (match.isMatch) {
+                state.stats.matched += 1;
+            } else {
+                state.stats.mismatched += 1;
+            }
+
+            renderProductCard(product, match);
+        }
+
+        dom.scanButton.classList.add('hidden');
+        setScanControls({ scan: false, next: true, finish: true });
+    } catch (error) {
+        console.error('Barcode scan failed:', error);
+
+        renderScanMessage(
+            'Barcode scan failed:',
+            error?.message || MESSAGES.scanFailed
+        );
+
+        setScanControls({ scan: false, next: true, finish: true });
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Event handlers                                                            */
+/* -------------------------------------------------------------------------- */
+
+/** 
+ * Logs in via the API, stores the session and opens the selection screen.
+ * @returns {void}
+ */
+async function handleLogin() {
+    const username = dom.usernameInput.value.trim();
+    const password = dom.passwordInput.value;
+
+    clearLoginError();
+
     if (!username || !password) {
-        loginError.textContent =
-            'Please enter your username and password.';
-        loginError.classList.remove('hidden');
+        showLoginError(MESSAGES.loginRequired);
         return;
     }
 
-    loginButton.disabled = true;
+    dom.loginButton.disabled = true;
 
-    // Attempt to log in the user.
     try {
         const data = await loginUser(username, password);
 
-        // Save the authenticated session in local storage.
+        // Persist the session so it can be restored on next launch.
         await saveAuth(data);
 
-        // Validate that categories are available for the account.
-        // if (data.categories.length === 0) {
-        //     throw new Error(
-        //         'No categories are available for this account.'
-        //     );
-        // }
+        applySession(data);
 
-        // Store the authenticated session in memory.
-        accessToken = data.access;
-        refreshToken = data.refresh;
-        currentUser = data.user;
-        categories = data.categories;
+        dom.usernameInput.value = '';
+        dom.passwordInput.value = '';
 
-        populateCategories();
-
-        // Display the logged-in user's name and store name.
-        loggedInUsername.textContent = [
-            currentUser.name,
-            currentUser.store_name,
-        ].filter(Boolean).join(' - ');
-
-        usernameInput.value = '';
-        passwordInput.value = '';
-
-        // Reset selection and scanning data before showing the selection screen.
-        resetSelection();
-        resetScan();
-        showScreen(selectionScreen);
+        showScreen(dom.selectionScreen);
     } catch (error) {
         console.error('Login failed:', error);
-
-        loginError.textContent =
-            error.message || 'Unable to log in. Please try again.';
-
-        loginError.classList.remove('hidden');
+        showLoginError(error.message || MESSAGES.loginFailed);
     } finally {
-        loginButton.disabled = false;
+        dom.loginButton.disabled = false;
     }
-});
+}
 
-// Allow Enter to submit the login form.
-[usernameInput, passwordInput].forEach((input) => {
-    input.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-            loginButton.click();
-        }
-    });
-});
-
-// Start scanning.
-
-startScanButton.addEventListener('click', async () => {
-    const category = findCategory(categorySelect.value);
-
-    const subcategory = findSubcategory(
-        category,
-        subCategorySelect.value
-    );
+/**
+ * Loads products for the chosen category / sub-category and starts scanning.
+ * @returns {void}
+ */
+async function handleStartScan() {
+    const category = findCategory(dom.categorySelect.value);
+    const subcategory = findSubcategory(category, dom.subCategorySelect.value);
 
     if (!category || !subcategory) {
         return;
     }
 
+    const { accessToken, currentUser } = state;
+
     if (!accessToken || !currentUser?.id || !currentUser?.store_id) {
-        alert('Please log in again.');
+        alert(MESSAGES.sessionExpired);
         return;
     }
 
-    startScanButton.disabled = true;
-    startScanButton.textContent = 'Loading products...';
+    dom.startScanButton.disabled = true;
+    dom.startScanButton.textContent = LABELS.loadingProducts;
 
     try {
-        products = await getProducts(
+        state.products = await getProducts(
             accessToken,
             currentUser.id,
             currentUser.store_id,
@@ -338,14 +630,11 @@ startScanButton.addEventListener('click', async () => {
             subcategory.id
         );
 
-        console.log('Products loaded:', products);
-
         resetScan();
 
-        selectedCategory.textContent = category.name;
-        selectedSubCategory.textContent = subcategory.name;
-
-        inventoryUploadedAt.textContent = new Date().toLocaleString(
+        dom.selectedCategory.textContent = category.name;
+        dom.selectedSubCategory.textContent = subcategory.name;
+        dom.inventoryUploadedAt.textContent = new Date().toLocaleString(
             'en-IN',
             {
                 day: '2-digit',
@@ -356,338 +645,96 @@ startScanButton.addEventListener('click', async () => {
             }
         );
 
-        showScreen(scanningScreen);
+        showScreen(dom.scanningScreen);
     } catch (error) {
         console.error('Unable to load products:', error);
-        alert(error.message || 'Unable to load products.');
+        alert(error.message || MESSAGES.productsFailed);
     } finally {
-        startScanButton.disabled = false;
-        startScanButton.textContent = 'Start Scanning';
-    }
-});
-
-// Go back to category selection.
-backButton.addEventListener('click', () => {
-    resetScan();
-    showScreen(selectionScreen);
-});
-
-// Scan a barcode and compare it with the selected category.
-async function scanProduct() {
-    barcodeResult.innerHTML = '';
-    productDetails.innerHTML = '';
-
-    scanButton.disabled = true;
-    nextButton.disabled = true;
-    finishButton.disabled = true;
-
-    // Request camera permission and scan the barcode.
-    try {
-        const result = await CapacitorBarcodeScanner.scanBarcode({
-            hint: CapacitorBarcodeScannerTypeHint.ALL,
-        });
-
-        const barcode = result?.ScanResult?.trim();
-
-        if (!barcode) {
-            barcodeResult.innerHTML = '<p>No barcode detected.</p>';
-            scanButton.disabled = false;
-            return;
-        }
-
-        totalScanned += 1;
-        totalScannedCount.textContent = String(totalScanned);
-
-        const barcodeParagraph = document.createElement('p');
-        const barcodeLabel = document.createElement('strong');
-
-        barcodeLabel.textContent = 'Barcode: ';
-
-        barcodeParagraph.append(
-            barcodeLabel,
-            document.createTextNode(barcode)
-        );
-
-        barcodeResult.appendChild(barcodeParagraph);
-
-        const product = products.find(
-            (item) => String(item.product_id) === barcode
-        );
-
-        // Display product details and check for category/subcategory match.
-        if (!product) {
-            mismatchedProducts += 1;
-
-            productDetails.innerHTML = `
-                <div class="product-card mismatch-highlight">
-                    <p>Product Not Found</p>
-                    <h2>Product Mismatch</h2>
-                </div>
-            `;
-        } else {
-            // Temporary compatibility mapping for demo products.
-            const categoryKey = product.category;
-            const subcategoryKey = product.subCategory;
-
-            // Find the actual category and subcategory based on the product's category and subcategory keys.
-            /*const actualCategory = categories.find((category) =>
-                category.name.toLowerCase() ===
-                ({
-                    babycare: 'baby care',
-                    clothing: 'clothing',
-                    toys: 'toys',
-                }[categoryKey] ?? categoryKey.toLowerCase())
-            );*/
-
-            const actualCategory = categories.find(
-                (item) => item.name === product.category_name
-            );
-
-            // Find the actual subcategory based on the product's subcategory key.
-            /*const actualSubcategory =
-                actualCategory?.subcategories?.find((subcategory) =>
-                    subcategory.name.toLowerCase() ===
-                    ({
-                        diapers: 'diapers',
-                        feeding: 'feeding',
-                        boyswear: 'boys wear',
-                        girlswear: 'girls wear',
-                        softtoys: 'soft toys',
-                        edutoys: 'educational toys',
-                    }[subcategoryKey] ?? subcategoryKey.toLowerCase())
-                );*/
-            
-            const actualSubcategory =
-                actualCategory?.subcategories?.find(
-                    (item) => item.name === product.subcategory_name
-                );
-
-            const selectedCategoryData =
-                findCategory(categorySelect.value);
-
-            const selectedSubcategoryData = findSubcategory(
-                selectedCategoryData,
-                subCategorySelect.value
-            );
-
-            const categoryMatches =
-                actualCategory &&
-                String(actualCategory.id) ===
-                    String(selectedCategoryData?.id);
-
-            const subcategoryMatches =
-                actualSubcategory &&
-                String(actualSubcategory.id) ===
-                    String(selectedSubcategoryData?.id);
-
-            const isMatch = Boolean(
-                categoryMatches && subcategoryMatches
-            );
-
-            if (!isMatch) {
-                mismatchedProducts += 1;
-            } else {
-                matchedProducts += 1;
-            }
-
-            const cardClass = isMatch
-                ? 'product-card'
-                : 'product-card mismatch-highlight';
-
-            const title = isMatch
-                ? product.name
-                : 'Product Mismatch';
-
-            const details = document.createElement('div');
-            details.className = cardClass;
-
-            const heading = document.createElement('h2');
-            heading.textContent = title;
-            details.appendChild(heading);
-
-            if (!isMatch) {
-                details.appendChild(document.createElement('hr'));
-            }
-
-            const productName = document.createElement('p');
-            productName.innerHTML = '<strong>Product:</strong> ';
-            productName.appendChild(
-                document.createTextNode(product.product_name)
-            );
-            details.appendChild(productName);
-
-            const actualCategoryParagraph =
-                document.createElement('p');
-
-            actualCategoryParagraph.innerHTML =
-                '<strong>Actual Category:</strong> ';
-
-            actualCategoryParagraph.appendChild(
-                document.createTextNode(
-                    actualCategory?.name ?? 'Unknown'
-                )
-            );
-
-            details.appendChild(actualCategoryParagraph);
-
-            const actualSubcategoryParagraph =
-                document.createElement('p');
-
-            actualSubcategoryParagraph.innerHTML =
-                '<strong>Actual Sub Category:</strong> ';
-
-            actualSubcategoryParagraph.appendChild(
-                document.createTextNode(
-                    actualSubcategory?.name ?? 'Unknown'
-                )
-            );
-
-            details.appendChild(actualSubcategoryParagraph);
-
-            const priceParagraph = document.createElement('p');
-            priceParagraph.innerHTML = '<strong>Price:</strong> ';
-            priceParagraph.appendChild(
-                document.createTextNode(`₹${product.mrp}`)
-            );
-            details.appendChild(priceParagraph);
-
-            const stockParagraph = document.createElement('p');
-            stockParagraph.innerHTML = '<strong>Stock:</strong> ';
-            stockParagraph.appendChild(
-                document.createTextNode(String(product.quantity))
-            );
-            details.appendChild(stockParagraph);
-
-            productDetails.appendChild(details);
-        }
-
-        scanButton.classList.add('hidden');
-        nextButton.disabled = false;
-        finishButton.disabled = false;
-    } catch (error) {
-        console.error('Barcode scan failed:', error);
-
-        const message = document.createElement('p');
-        const label = document.createElement('strong');
-
-        label.textContent = 'Barcode scan failed: ';
-
-        message.append(
-            label,
-            document.createTextNode(
-                error?.message || 'Unable to scan the barcode.'
-            )
-        );
-
-        barcodeResult.replaceChildren(message);
-
-        nextButton.disabled = false;
-        finishButton.disabled = false;
+        dom.startScanButton.disabled = false;
+        dom.startScanButton.textContent = LABELS.startScanning;
     }
 }
 
-// Scan the first product.
-scanButton.addEventListener('click', scanProduct);
-
-// Scan the next product.
-nextButton.addEventListener('click', scanProduct);
-
-// Finish scanning and display the summary.
-finishButton.addEventListener('click', () => {
-    barcodeResult.innerHTML = '';
-    productDetails.innerHTML = '';
-
-    scanButton.classList.add('hidden');
-    nextButton.classList.add('hidden');
-    finishButton.classList.add('hidden');
-
-    scanningScreen.querySelector('.screen-header h2').textContent =
-        'Summary';
-
-    summary.innerHTML = `
-        <div class="summary-card">
-            <h2>Scan Summary</h2>
-            <p><strong>Total Scanned Products:</strong>
-                ${totalScanned}
-            </p>
-            <p><strong>Available Products:</strong>
-                ${matchedProducts}
-            </p>
-            <p><strong>Not Available Products:</strong>
-                ${mismatchedProducts}
-            </p>
-        </div>
-    `;
-});
-
-// Logout.
-logoutButton.addEventListener('click', async () => {
-    logoutButton.disabled = true;
+/**
+ * Clears the stored session and returns to the login screen.
+ * @returns {void}
+ */
+async function handleLogout() {
+    dom.logoutButton.disabled = true;
 
     try {
-        // Clear the authenticated session from local storage.
         await clearAuth();
-
-        resetScan();
-        resetSelection();
-
-        accessToken = null;
-        refreshToken = null;
-        currentUser = null;
-        categories = [];
-        
-        // Clear the category dropdown.
-        populateCategories();
-
-        loggedInUsername.textContent = '';
-        loginError.textContent = '';
-        loginError.classList.add('hidden');
-
-        usernameInput.value = '';
-        passwordInput.value = '';
-
-        // Show the login screen after logging out.
-        showScreen(loginScreen);
+        clearSession();
+        showScreen(dom.loginScreen);
     } catch (error) {
         console.error('Logout failed:', error);
-        alert('Unable to log out. Please try again.');
+        alert(MESSAGES.logoutFailed);
     } finally {
-        logoutButton.disabled = false;
+        dom.logoutButton.disabled = false;
     }
-});
+}
 
-// Restore session
+/**
+ * Registers all UI event listeners.
+ * @returns {void}
+ */
+function bindEvents() {
+    // Login (button click or Enter key in either field).
+    dom.loginButton.addEventListener('click', handleLogin);
+    [dom.usernameInput, dom.passwordInput].forEach((input) => {
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                handleLogin();
+            }
+        });
+    });
+
+    // Category → sub-category → Start Scanning.
+    dom.categorySelect.addEventListener('change', () => {
+        populateSubcategories(findCategory(dom.categorySelect.value));
+    });
+    dom.subCategorySelect.addEventListener('change', () => {
+        dom.startScanButton.disabled = !dom.subCategorySelect.value;
+    });
+    dom.startScanButton.addEventListener('click', handleStartScan);
+
+    // Scanning screen.
+    dom.backButton.addEventListener('click', () => {
+        resetScan();
+        showScreen(dom.selectionScreen);
+    });
+    dom.scanButton.addEventListener('click', scanProduct);
+    dom.nextButton.addEventListener('click', scanProduct);
+    dom.finishButton.addEventListener('click', renderSummary);
+
+    // Logout.
+    dom.logoutButton.addEventListener('click', handleLogout);
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Startup                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Restores a previously saved session from storage.
+ * @returns {Promise<boolean>} true if a valid session was restored.
+ */
 async function restoreSession() {
     try {
-        // Attempt to retrieve the authenticated session from local storage.
         const data = await getAuth();
 
         if (!data) {
             return false;
         }
 
-        if ( !data.access || !data.refresh || !data.user ) {
+        // Discard incomplete / corrupted sessions.
+        if (!data.access || !data.refresh || !data.user) {
             await clearAuth();
             return false;
         }
 
-        // Store the authenticated session in memory.
-        accessToken = data.access;
-        refreshToken = data.refresh;
-        currentUser = data.user;
-        categories = data.categories;
-
-        populateCategories();
-
-        loggedInUsername.textContent = [
-            currentUser.name,
-            currentUser.store_name,
-        ].filter(Boolean).join(' - ');
-
-        // Reset selection and scanning data before showing the selection screen.
-        resetSelection();
-        resetScan();
-        showScreen(selectionScreen);
+        applySession(data);
+        showScreen(dom.selectionScreen);
 
         return true;
     } catch (error) {
@@ -696,24 +743,26 @@ async function restoreSession() {
     }
 }
 
-// Initialise the app.
+/**
+ * App entry point.
+ * @returns {void}
+ */
 async function initialiseApp() {
-    loginError.textContent = '';
-    loginError.classList.add('hidden');
-
-    // Reset selection and scanning data before attempting to restore the session.
+    reportMissingElements();
+    bindEvents();
+    clearLoginError();
     resetSelection();
     resetScan();
 
-    // Attempt to restore the authenticated session from local storage.
     const restored = await restoreSession();
 
-    // If the session could not be restored, show the login screen.
     if (!restored) {
         populateCategories();
-        showScreen(loginScreen);
+        showScreen(dom.loginScreen);
     }
 }
 
-// Start the app.
+/**
+ * Start the app.
+ */
 initialiseApp();
