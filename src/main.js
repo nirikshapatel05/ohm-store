@@ -461,14 +461,41 @@ function renderSummary() {
     const heading = document.createElement('h2');
     heading.textContent = 'Scan Summary';
 
-    card.append(
-        heading,
-        createDetailRow('Total Scanned Products:', String(total)),
-        createDetailRow('Available Products:', String(matched)),
-        createDetailRow('Not Available Products:', String(mismatched))
+    const rows = document.createElement('div');
+    rows.className = 'summary-rows';
+    rows.append(
+        createSummaryRow('Total Scanned Products', String(total), 'total'),
+        createSummaryRow('Available Products', String(matched), 'matched'),
+        createSummaryRow('Not Available Products', String(mismatched), 'mismatched')
     );
 
+    card.append(heading, rows);
+
     dom.summary.replaceChildren(card);
+}
+
+/**
+ * Creates a summary row element.
+ * @param {string} label
+ * @param {string} value
+ * @param {string} [modifier]
+ * @returns {HTMLDivElement}
+ */
+function createSummaryRow(label, value, modifier) {
+    const row = document.createElement('div');
+    row.className = `summary-row${modifier ? ` summary-row--${modifier}` : ''}`;
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'summary-label';
+    labelEl.textContent = label;
+
+    const valueEl = document.createElement('span');
+    valueEl.className = 'summary-value';
+    valueEl.textContent = value;
+
+    row.append(labelEl, valueEl);
+
+    return row;
 }
 
 /* -------------------------------------------------------------------------- */

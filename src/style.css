@@ -186,15 +186,70 @@ button:disabled {
 .summary-card {
     border: 1px solid var(--border-color);
     border-left: 4px solid var(--firstcry-yellow);
-    background: #fff;
+    background: #fffbf2;
     border-radius: 12px;
-    margin-top: 16px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+    margin: 16px 0 0;
     padding: 16px;
 }
 
 .summary-card h2 {
     color: var(--text-dark);
-    margin-top: 0;
+    margin: 0 0 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 1.1rem;
+}
+
+.summary-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+}
+
+.summary-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: #fff;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin: 0;
+    width: 100%;
+    box-sizing: border-box;
+    overflow-wrap: anywhere;
+}
+
+.summary-label {
+    font-weight: 600;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.summary-value {
+    flex: 0 0 auto;
+    font-weight: 700;
+    font-size: 1.05rem;
+    background: var(--firstcry-yellow);
+    border-radius: 999px;
+    min-width: 36px;
+    text-align: center;
+    padding: 2px 12px;
+}
+
+.summary-row--matched .summary-value {
+    background: #e6f4ea;
+}
+
+.summary-row--mismatched .summary-value {
+    background: var(--danger-bg);
+    color: var(--danger-text);
 }
 
 #selection-screen,
