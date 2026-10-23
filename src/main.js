@@ -14,11 +14,8 @@
  *   - @capacitor/barcode-scanner → native camera barcode scanning
  */
 
-import {
-    CapacitorBarcodeScanner,
-    CapacitorBarcodeScannerTypeHint,
-} from '@capacitor/barcode-scanner';
-import { loginUser, getProducts } from './api.js';
+import { CapacitorBarcodeScanner, CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
+import { loginUser, getProducts, submitSummary } from './api.js';
 import { saveAuth, getAuth, clearAuth } from './auth.js';
 
 /* -------------------------------------------------------------------------- */
@@ -79,6 +76,7 @@ const MESSAGES = {
 };
 
 const LABELS = {
+    next: 'Next',
     startScanning: 'Start Scanning',
     loadingProducts: 'Loading products...',
     scanHeading: 'Scan Products',
@@ -107,6 +105,7 @@ const state = {
     products: [],
     /** Counters for the current scanning session. */
     stats: { total: 0, matched: 0, mismatched: 0 },
+    availableProducts: [],
 };
 
 /* -------------------------------------------------------------------------- */
@@ -293,6 +292,8 @@ function setScanControls({ scan, next, finish }) {
  */
 function resetScan() {
     state.stats = { total: 0, matched: 0, mismatched: 0 };
+
+    state.availableProducts = [];
 
     dom.scanHeading.textContent = LABELS.scanHeading;
     dom.totalScannedCount.textContent = '0';
@@ -527,7 +528,7 @@ function evaluateProduct(product) {
 
 /**
  * Opens the camera, scans one barcode and shows the result.
- * Updates the counters for the summary.
+ * Updates the counters for summary and displays product details.
  */
 async function scanProduct() {
     dom.barcodeResult.innerHTML = '';
@@ -543,31 +544,46 @@ async function scanProduct() {
 
         if (!barcode) {
             dom.barcodeResult.innerHTML = `<p>${MESSAGES.noBarcode}</p>`;
-            // Let the user retry, or move on / finish.
+            // Allow the user to retry, move on, or finish.
             setScanControls({ scan: true, next: true, finish: true });
             return;
         }
 
+        // Increment the total scanned count.
         state.stats.total += 1;
         dom.totalScannedCount.textContent = String(state.stats.total);
         renderBarcode(barcode);
 
+        // Find the scanned product in the loaded product list.
         const product = state.products.find(
             (item) => String(item.product_id) === barcode
         );
 
         if (!product) {
+            // Product not found.
             state.stats.mismatched += 1;
             renderProductNotFound();
         } else {
+            // Check whether the product belongs to the selected
+            // category and subcategory.
             const match = evaluateProduct(product);
 
             if (match.isMatch) {
+                // Available product.
                 state.stats.matched += 1;
+
+                // Store only available product details for the API.
+                state.availableProducts.push({
+                    product_id: product.product_id,
+                    barcode: barcode,
+                    product_name: product.product_name,
+                });
             } else {
+                // Product exists but does not match the selection.
                 state.stats.mismatched += 1;
             }
 
+            // Display the product details.
             renderProductCard(product, match);
         }
 
@@ -678,7 +694,49 @@ async function handleStartScan() {
         alert(error.message || MESSAGES.productsFailed);
     } finally {
         dom.startScanButton.disabled = false;
-        dom.startScanButton.textContent = LABELS.startScanning;
+        dom.startScanButton.textContent = LABELS.next;
+    }
+}
+
+/**
+ * Submits the scan summary to the API and displays it on success.
+ * @returns {Promise<void>}
+ */
+async function handleFinish() {
+    const categoryId = dom.categorySelect.value;
+    const subcategoryId = dom.subCategorySelect.value;
+    const { accessToken, currentUser, stats, availableProducts } = state;
+
+    // Validate that the session is still valid before submitting.
+    if (!accessToken || !currentUser?.id || !currentUser?.store_id) {
+        alert(MESSAGES.sessionExpired);
+        return;
+    }
+
+    dom.finishButton.disabled = true;
+
+    // Submit the summary to the backend API.
+    try {
+        await submitSummary(
+            accessToken,
+            currentUser.id,
+            currentUser.store_id,
+            categoryId,
+            subcategoryId,
+            stats.total,
+            stats.matched,
+            stats.mismatched,
+            availableProducts
+        );
+
+        // Display the summary only after successful submission.
+        renderSummary();
+    } catch (error) {
+        console.error('Unable to submit scan summary:', error);
+        alert( error.message || 'Unable to submit scan summary. Please try again.' );
+
+        // Allow the user to retry.
+        dom.finishButton.disabled = false;
     }
 }
 
@@ -732,7 +790,7 @@ function bindEvents() {
     });
     dom.scanButton.addEventListener('click', scanProduct);
     dom.nextButton.addEventListener('click', scanProduct);
-    dom.finishButton.addEventListener('click', renderSummary);
+    dom.finishButton.addEventListener('click', handleFinish);
 
     // Logout.
     dom.logoutButton.addEventListener('click', handleLogout);

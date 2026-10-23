@@ -164,4 +164,71 @@ export async function getProducts(
     return products;
 }
 
+/**
+ * Submit the scan summary to the backend API.
+ * @param {string} accessToken - The access token for authentication.
+ * @param {number} userId - The ID of the user submitting the summary.
+ * @param {number} storeId - The ID of the store.
+ * @param {number} categoryId - The ID of the category.
+ * @param {number} subcategoryId - The ID of the subcategory.
+ * @param {number} totalScan - The total number of products scanned.
+ * @param {number} totalMatched - The number of matched products.
+ * @param {number} totalMisMatched - The number of mismatched products.
+ * @param {Array} products - An array of product objects to be submitted.
+ * @returns {Promise<Object>} - The response data from the API.
+ */
+export async function submitSummary(
+    accessToken,
+    userId,
+    storeId,
+    categoryId,
+    subcategoryId,
+    totalScan,
+    totalMatched,
+    totalMisMatched,
+    products
+) {
+    // Create a FormData object to hold the summary data.
+    const formData = new FormData();
+
+    formData.append('user_id', userId);
+    formData.append('store_id', storeId);
+    formData.append('category_id', categoryId);
+    formData.append('subcategory_id', subcategoryId);
+    formData.append('total_scan', totalScan);
+    formData.append('total_matched', totalMatched);
+    formData.append('total_mismatched', totalMisMatched);
+
+    const productIds = products.map((product) => product.product_id);
+    formData.append('product_ids', JSON.stringify(productIds));
+
+    // Use fetch to send the summary submission request to the backend API.
+    const response = await fetch(`${API_BASE_URL}/scan_history/`, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+        },
+        body: formData,
+    });
+
+    // Get the JSON response from the API.
+    const result = await response.json();
+
+    // Check for HTTP errors and API response status.
+    if (!response.ok) {
+        throw new Error(
+            result?.message || `Summary API failed: ${response.status}`
+        );
+    }
+
+    // Check for API response status.
+    if (result?.status !== 'success') {
+        throw new Error(
+            result?.message || 'Unable to submit scan summary.'
+        );
+    }
+
+    return result.data ?? result;
+}
+
 
