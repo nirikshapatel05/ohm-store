@@ -73,6 +73,7 @@ const MESSAGES = {
     logoutFailed: 'Unable to log out. Please try again.',
     scanFailed: 'Unable to scan the barcode.',
     noBarcode: 'No barcode detected.',
+    noProducts: 'No products found for the selected category and sub-category.',
 };
 
 const LABELS = {
@@ -650,21 +651,25 @@ async function handleStartScan() {
     const category = findCategory(dom.categorySelect.value);
     const subcategory = findSubcategory(category, dom.subCategorySelect.value);
 
+    // Validate that both category and sub-category are selected.
     if (!category || !subcategory) {
         return;
     }
 
     const { accessToken, currentUser } = state;
 
+    // Validate that the session is still valid before loading products.
     if (!accessToken || !currentUser?.id || !currentUser?.store_id) {
         alert(MESSAGES.sessionExpired);
         return;
     }
 
+    // Disable the button and show a loading message while products are fetched.
     dom.startScanButton.disabled = true;
     dom.startScanButton.textContent = LABELS.loadingProducts;
 
     try {
+        // Load products for the selected category and sub-category.
         state.products = await getProducts(
             accessToken,
             currentUser.id,
@@ -673,10 +678,14 @@ async function handleStartScan() {
             subcategory.id
         );
 
+        // Reset the scanning state before starting a new scan session.
         resetScan();
 
+        // Show the selected category and sub-category in the scanning screen.
         dom.selectedCategory.textContent = category.name;
         dom.selectedSubCategory.textContent = subcategory.name;
+
+        // Show the current date and time in the scanning screen.
         dom.inventoryUploadedAt.textContent = new Date().toLocaleString(
             'en-IN',
             {
@@ -688,7 +697,16 @@ async function handleStartScan() {
             }
         );
 
+        // Show the scanning screen after category selection done.
         showScreen(dom.scanningScreen);
+
+        // If no products were returned, disable the scan button and show a message.
+        if (state.products.length === 0) {
+            dom.scanButton.disabled = true;
+            dom.scanButton.classList.remove('hidden');
+            dom.barcodeResult.innerHTML = `<p>${MESSAGES.noProducts}</p>`;
+            return;
+        }
     } catch (error) {
         console.error('Unable to load products:', error);
         alert(error.message || MESSAGES.productsFailed);
