@@ -191,16 +191,21 @@ export async function submitSummary(
     // Create a FormData object to hold the summary data.
     const formData = new FormData();
 
+    // Include each available product ID and its scanned quantity.
+    const productData = products.map((product) => ({
+        product_id: product.product_id,
+        quantity: product.quantity,
+    }));
+
     formData.append('user_id', userId);
     formData.append('store_id', storeId);
     formData.append('category_id', categoryId);
     formData.append('subcategory_id', subcategoryId);
     formData.append('total_scan', totalScan);
+    formData.append('total_unique_scan', products.length);
     formData.append('total_matched', totalMatched);
-    formData.append('total_mismatched', totalMisMatched);
-
-    const productIds = products.map((product) => product.product_id);
-    formData.append('product_ids', JSON.stringify(productIds));
+    formData.append('not_found_scan', totalMisMatched);
+    formData.append('products', JSON.stringify(productData));
 
     // Use fetch to send the summary submission request to the backend API.
     const response = await fetch(`${API_BASE_URL}/scan_history/`, {

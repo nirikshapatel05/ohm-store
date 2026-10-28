@@ -573,12 +573,21 @@ async function scanProduct() {
                 // Available product.
                 state.stats.matched += 1;
 
-                // Store only available product details for the API.
-                state.availableProducts.push({
-                    product_id: product.product_id,
-                    barcode: barcode,
-                    product_name: product.product_name,
-                });
+                // Check if the same product(same barcode) is already in the available products list.
+                const existingProduct = state.availableProducts.find(
+                    (item) => String(item.product_id) === String(product.product_id)
+                );
+
+                // For same product, increment the quantity.
+                if (existingProduct) {
+                    existingProduct.quantity += 1;
+                } else {
+                    // Add new product to the available products list.
+                    state.availableProducts.push({
+                        product_id: product.product_id,
+                        quantity: 1,
+                    });
+                }
             } else {
                 // Product exists but does not match the selection.
                 state.stats.mismatched += 1;
