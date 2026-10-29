@@ -188,32 +188,30 @@ export async function submitSummary(
     totalMisMatched,
     products
 ) {
-    // Create a FormData object to hold the summary data.
-    const formData = new FormData();
-
-    // Include each available product ID and its scanned quantity.
-    const productData = products.map((product) => ({
-        product_id: product.product_id,
-        quantity: product.quantity,
-    }));
-
-    formData.append('user_id', userId);
-    formData.append('store_id', storeId);
-    formData.append('category_id', categoryId);
-    formData.append('subcategory_id', subcategoryId);
-    formData.append('total_scan', totalScan);
-    formData.append('total_unique_scan', products.length);
-    formData.append('total_matched', totalMatched);
-    formData.append('not_found_scan', totalMisMatched);
-    formData.append('products', JSON.stringify(productData));
+    // Build the payload object to be sent in the request body.
+    const payload = {
+        user_id: userId,
+        store_id: storeId,
+        category_id: categoryId,
+        subcategory_id: subcategoryId ?? null,
+        total_scan: totalScan,
+        total_unique_scan: products.length,
+        total_matched: totalMatched,
+        not_found_scan: totalMisMatched,
+        products: products.map((product) => ({
+            product_id: product.product_id,
+            quantity: product.quantity,
+        })),
+    };
 
     // Use fetch to send the summary submission request to the backend API.
     const response = await fetch(`${API_BASE_URL}/scan_history/`, {
         method: 'POST',
         headers: {
             Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',   // required for a JSON body
         },
-        body: formData,
+        body: JSON.stringify(payload),           // the whole object is stringified once
     });
 
     // Get the JSON response from the API.
